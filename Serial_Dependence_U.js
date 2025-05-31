@@ -23,7 +23,152 @@ let expInfo = {
 // Start code blocks for 'Before Experiment'
 // Run 'Before Experiment' code from code_2
 console.log("🔍 当前 x_scale =", x_scale);  // ✅ 输出 x_scale 的值
+class Dot {
+  constructor(x, y, radius, speed, direction) {
+    this.x = x;
+    this.y = y;
+    this.radius = radius;
+    this.speed = speed;
+    this.mode = "noise";  // 默认值
+
+    //const blend = 0.1;  // 插值权重，越小越平滑
+    //this.theta = (1 - blend) * this.theta + blend * this.fixedDir;
+      
+   // const noiseScale = 0.3;
+    //this.theta += (Math.random() - 0.5) * noiseScale;
+    this.theta = Math.random() * 2 * Math.PI;
+    this.fixedDir = direction;  // coherent motion direction
+    this.noiseBias = (Math.random() - 0.5) * Math.PI;  // ±90° 偏置
+    //this.maxLife = 180+ Math.floor(Math.random() *20);  // 30–90 帧寿命
+    this.life = Math.floor(Math.random() * this.maxLife);  // 随机 phase
+  }
+
+updateDirection(dt) {
+  if (this.mode === "coherent") {
+    this.move(this.fixedDir, dt);
+  } else {
+   this.theta = Math.random() * 2 * Math.PI;
+this.move(this.theta, dt);
+
+  }
+}
+
+
+  move(theta, dt) {
+    this.x += this.speed * dt * Math.cos(theta);
+    this.y += this.speed * dt * Math.sin(theta);
+
+    // ⭕ Wrap：点超出边界则从对侧重新进入
+    const dx = this.x - fieldCenterX;
+    const dy = this.y - fieldCenterY;
+    if (dx * dx + dy * dy > fieldRadius * fieldRadius) {
+      const angle = Math.atan2(dy, dx) + Math.PI;
+      const r = fieldRadius * Math.sqrt(Math.random());
+      this.x = fieldCenterX + r * Math.cos(angle);
+      this.y = fieldCenterY + r * Math.sin(angle);
+      this.theta = Math.random() * 2 * Math.PI;
+    }
+
+    // 🧬 Dot life 机制：过期后自动重生
+    this.life -= 1;
+    if (this.life <= 0) {
+      const angle = Math.random() * 2 * Math.PI;
+      const r = fieldRadius * Math.sqrt(Math.random());
+      this.x = fieldCenterX + r * Math.cos(angle);
+      this.y = fieldCenterY + r * Math.sin(angle);
+      this.theta = Math.random() * 2 * Math.PI;
+      this.life = this.maxLife;
+      this.noiseBias = (Math.random() - 0.5) * Math.PI;  // 重新随机化个体偏置
+    }
+  }
+
+  draw(ctx) {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, 2 * Math.PI);
+    ctx.fillStyle = "white";
+    ctx.fill();
+  }
+}
+
+class RampEnvelope {
+  constructor(start = 0.0, peak = 0.7, pre = 200, rampUp = 60, plateau = 800, rampDown = 60, post = 200) {
+    this.start = start;
+    this.peak = peak;
+    this.t1 = pre;
+    this.t2 = this.t1 + rampUp;
+    this.t3 = this.t2 + plateau;
+    this.t4 = this.t3 + rampDown;
+    this.t5 = this.t4 + post;
+  }
+
+  getCoherence(t) {
+    if (t < this.t1) return this.start;
+    if (t < this.t2) return this.start + (this.peak - this.start) * ((t - this.t1) / (this.t2 - this.t1));
+    if (t < this.t3) return this.peak;
+    if (t < this.t4) return this.peak - (this.peak - this.start) * ((t - this.t3) / (this.t4 - this.t3));
+    return this.start;
+  }
+   getSpeedFactor(t) {
+  const coh = this.getCoherence(t);  // 利用已有函数
+  // 假设 plateau 区间用 full speed = 1.0
+  // ramp 阶段逐渐从 0.6 ~ 1.0
+  if (coh <= 0.1) return 1;
+  return 0.8 + 0.2 * (coh / this.peak) ;  // [0.6 ~ 1.0]0.8 + 0.2 * (coh / this.peak)
+}
+
+  isFinished(t) {
+    return t >= this.t5;
+  }
+}
+
+
+function getPerceptualSpeed(baseSpeed, coherence) {
+  const scale = 1   ;  // 0.3 → 1.04, 0.7 → 0.96
+  return baseSpeed * scale;
+} 
+
+function assignDotModes(dots, coherence) {
+  const nSignal = Math.round(dots.length * coherence);
+  const indices = [...Array(dots.length).keys()];
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  const signalIndices = indices.slice(0, nSignal);
+
+  for (let i = 0; i < dots.length; i++) {
+    dots[i].mode = signalIndices.includes(i) ? "coherent" : "noise";
+  }
+}
+
+
+function perceptualSpeedCompensation(baseSpeed, coherence) {
+  const k = 0.7;  // 补偿因子
+  if (coherence <= 0.1) {
+    return baseSpeed;  // coherence 太低，不补偿
+  } else {
+    return baseSpeed * (1 + k * (0.7 - coherence));
+    // coherence=0.7 → 无补偿，coherence=0.3 → 有补偿
+  }
+}
+
 window.keyDuration_global = 9999;
+
+function ensureCanvasReady() {
+  if (!window.rdkCanvas) {
+    const canvas = document.createElement("canvas");
+    canvas.id = "canvas";
+    canvas.width = psychoJS.window.size[0];
+    canvas.height = psychoJS.window.size[1];
+    canvas.style.position = "absolute";
+    canvas.style.top = "0";
+    canvas.style.left = "0";
+    canvas.style.zIndex = "10";
+    canvas.style.backgroundColor = "transparent";
+    document.getElementById("root").appendChild(canvas);
+    window.rdkCanvas = canvas;
+  }
+}
 
 // init psychoJS:
 const psychoJS = new PsychoJS({
@@ -91,7 +236,7 @@ psychoJS.start({
     // resources:
     {'name': 'condition.csv', 'path': 'condition.csv'},
     {'name': 'bank-1300155_640.png', 'path': 'bank-1300155_640.png'},
-    {'name': 'ins.jpg', 'path': 'ins.jpg'},
+    {'name': 'instr.png', 'path': 'instr.png'},
     {'name': 'dots.js', 'path': 'dots.js'},
   ]
 });
@@ -160,8 +305,7 @@ var ITIClock;
 var BKG_9;
 var Mask_2Clock;
 var BKG_6;
-var Fixation_4;
-var M2Clock;
+var encodingClock;
 var BKG_3;
 var CueClock;
 var BKG_8;
@@ -304,7 +448,7 @@ async function experimentInit() {
   Ins_image_2 = new visual.ImageStim({
     win : psychoJS.window,
     name : 'Ins_image_2', units : 'norm', 
-    image : 'ins.jpg', mask : undefined,
+    image : 'instr.png', mask : undefined,
     anchor : 'center',
     ori : 0, pos : [0, 0], size : 1.0,
     color : new util.Color([1, 1, 1]), opacity : 1,
@@ -361,20 +505,8 @@ async function experimentInit() {
     opacity: 1, depth: 0, interpolate: true,
   });
   
-  Fixation_4 = new visual.Polygon ({
-    win: psychoJS.window, name: 'Fixation_4', 
-    edges: 360, size:[0.01, 0.01],
-    ori: 0, pos: [0, 0],
-    anchor: 'center',
-    lineWidth: 1, 
-    colorSpace: 'rgb',
-    lineColor: new util.Color([1, 1, 1]),
-    fillColor: new util.Color([1, 1, 1]),
-    opacity: 1, depth: -1, interpolate: true,
-  });
-  
-  // Initialize components for Routine "M2"
-  M2Clock = new util.Clock();
+  // Initialize components for Routine "encoding"
+  encodingClock = new util.Clock();
   BKG_3 = new visual.Polygon ({
     win: psychoJS.window, name: 'BKG_3', 
     edges: 360, size:[15, 15],
@@ -424,7 +556,7 @@ async function experimentInit() {
     colorSpace: 'rgb',
     lineColor: new util.Color([(- 0.25), (- 0.25), (- 0.25)]),
     fillColor: new util.Color([(- 0.25), (- 0.25), (- 0.25)]),
-    opacity: 1, depth: -1, interpolate: true,
+    opacity: 1, depth: 0, interpolate: true,
   });
   
   // Initialize components for Routine "Feedback_Time"
@@ -674,7 +806,7 @@ function trialsLoopBegin(trialsLoopScheduler, snapshot) {
     // set up handler to look after randomisation of conditions etc
     trials = new TrialHandler({
       psychoJS: psychoJS,
-      nReps: 10, method: TrialHandler.Method.RANDOM,
+      nReps: 9, method: TrialHandler.Method.RANDOM,
       extraInfo: expInfo, originPath: undefined,
       trialList: 'condition.csv',
       seed: undefined, name: 'trials'
@@ -695,9 +827,9 @@ function trialsLoopBegin(trialsLoopScheduler, snapshot) {
       trialsLoopScheduler.add(Mask_2RoutineBegin(snapshot));
       trialsLoopScheduler.add(Mask_2RoutineEachFrame());
       trialsLoopScheduler.add(Mask_2RoutineEnd(snapshot));
-      trialsLoopScheduler.add(M2RoutineBegin(snapshot));
-      trialsLoopScheduler.add(M2RoutineEachFrame());
-      trialsLoopScheduler.add(M2RoutineEnd(snapshot));
+      trialsLoopScheduler.add(encodingRoutineBegin(snapshot));
+      trialsLoopScheduler.add(encodingRoutineEachFrame());
+      trialsLoopScheduler.add(encodingRoutineEnd(snapshot));
       trialsLoopScheduler.add(Mask_2RoutineBegin(snapshot));
       trialsLoopScheduler.add(Mask_2RoutineEachFrame());
       trialsLoopScheduler.add(Mask_2RoutineEnd(snapshot));
@@ -764,7 +896,6 @@ function screen_scale_keysRoutineBegin(snapshot) {
     frameN = -1;
     continueRoutine = true; // until we're told otherwise
     // update component parameters for each repeat
-    psychoJS.experiment.addData('screen_scale_keys.started', globalClock.getTime());
     // Run 'Begin Routine' code from code_scale
     psychoJS.window.mouseVisible = false;
     console.log("key start");
@@ -911,11 +1042,8 @@ function screen_scale_keysRoutineEnd(snapshot) {
         thisComponent.setAutoDraw(false);
       }
     }
-    psychoJS.experiment.addData('screen_scale_keys.stopped', globalClock.getTime());
     // Run 'End Routine' code from code_scale
-    psychoJS.experiment.addData("X Scale", x_scale);
-    psychoJS.experiment.addData("Y Scale", y_scale);
-    
+    /* Syntax Error: Fix Python code */
     // the Routine "screen_scale_keys" was not non-slip safe, so reset the non-slip timer
     routineTimer.reset();
     
@@ -940,7 +1068,6 @@ function rectangel_keysRoutineBegin(snapshot) {
     frameN = -1;
     continueRoutine = true; // until we're told otherwise
     // update component parameters for each repeat
-    psychoJS.experiment.addData('rectangel_keys.started', globalClock.getTime());
     polygon_keys.setSize([(10 * x_scale), (10 * y_scale)]);
     key_resp_keys.keys = undefined;
     key_resp_keys.rt = undefined;
@@ -1046,7 +1173,6 @@ function rectangel_keysRoutineEnd(snapshot) {
         thisComponent.setAutoDraw(false);
       }
     }
-    psychoJS.experiment.addData('rectangel_keys.stopped', globalClock.getTime());
     key_resp_keys.stop();
     // the Routine "rectangel_keys" was not non-slip safe, so reset the non-slip timer
     routineTimer.reset();
@@ -1074,7 +1200,7 @@ function IntroRoutineBegin(snapshot) {
     // update component parameters for each repeat
     psychoJS.experiment.addData('Intro.started', globalClock.getTime());
     Ins_image_2.setPos([0, 0]);
-    Ins_image_2.setSize([1.5, 1.5]);
+    Ins_image_2.setSize([1.5, 2]);
     key_resp_2.keys = undefined;
     key_resp_2.rt = undefined;
     _key_resp_2_allKeys = [];
@@ -1226,13 +1352,15 @@ function blockRoutineBegin(snapshot) {
     // Run 'Begin Routine' code from Block_code_2
     psychoJS.window.mouseVisible = false;
     
-    // 设置方向角
-    window.trial_direction = Math.floor(Math.random() * 360);
+    let direction = Math.floor(Math.random() * 360);  // 或者读取条件生成的方向
+    window.trial_direction = direction;               // ✔️ 保存到 window 对象上
+    psychoJS.experiment.addData("direction", direction);
     
     // 参数设定
-    const blockSize = 54;
+    const blockSize = 30;
     const Practice_num = 1;
     const Block_num = Math.ceil(trials.nTotal / blockSize);
+    
     
     // 当前全局 trial 编号
     let trialNumber = trials.thisN;  // ✅ 是当前 loop 中真实的执行顺序
@@ -1241,6 +1369,9 @@ function blockRoutineBegin(snapshot) {
     // 当前 block ID（从 0 开始），当前 block 内的 trial index
     let Block_id = Math.floor(trialNumber / blockSize);
     let trial_in_block = trialNumber % blockSize;
+    window.Block_id = Block_id;
+    window.Practice_num = Practice_num;
+    window.feedbackID = feedbackID;
     
     // === 强制记录 Block_id，每轮 trial 都记录 ===
     psychoJS.experiment.addData("Block_id", Block_id);
@@ -1358,6 +1489,7 @@ function blockRoutineEnd(snapshot) {
       }
     }
     psychoJS.experiment.addData('block.stopped', globalClock.getTime());
+    psychoJS.experiment.addData('trial_direction', window.trial_direction);
     // update the trial handler
     if (currentLoop instanceof MultiStairHandler) {
       currentLoop.addResponse(Block_resp_2.corr, level);
@@ -1490,13 +1622,16 @@ function Mask_2RoutineBegin(snapshot) {
     // update component parameters for each repeat
     psychoJS.experiment.addData('Mask_2.started', globalClock.getTime());
     // Run 'Begin Routine' code from Direction_3
-    const fps = 120;
+    // ========== 参数定义 ==========
+    const fps = 60;
     let cm_to_px_x = psychoJS.window.size[0] * x_scale;
-    let speed = (2 * cm_to_px_x) / fps;
-    
+    let cm_to_px_y = psychoJS.window.size[1] * y_scale;
+    let speed = (1.75 * cm_to_px_x) / fps;
+    let direction = window.trial_direction  
     console.log(`📏 帧率=${fps} Hz，速度=${speed.toFixed(2)} px/frame`);
+    console.log("🔍 当前 x_scale =", x_scale); 
     
-    
+    // ========== 创建 Canvas ==========
     if (!window.rdkCanvas) {
       const root = document.getElementById("root");
       const canvas = document.createElement("canvas");
@@ -1510,40 +1645,32 @@ function Mask_2RoutineBegin(snapshot) {
       canvas.style.backgroundColor = "transparent";
       root.appendChild(canvas);
       window.rdkCanvas = canvas;
-    console.log("🔍 当前 x_scale =", x_scale);  // ✅ 输出 x_scale 的值
-      // 初始化 RDK
-      // 原来的 x_scale 是 cm → norm单位的比例，现在要转为 cm → 像素
-    let cm_to_px_x = psychoJS.window.size[0] * x_scale;  // 每 cm 多少 px
-    let cm_to_px_y = psychoJS.window.size[1] * y_scale;
+    }
     
-    
-      
-     window.rdk = new RDK({
+    // ========== 初始化纯噪声 RDK ==========
+    window.rdk = new RDK({
       canvasId: "canvas",
-      type: "mask",
-      noiseMode: "walk",
-      direction: 0,
-      coherence: 0,
+      type: "mask",               // 遮罩类型（非按键模式）
+      noiseMode: "walk",          // 每帧都换方向
+      direction: 0,               // 无效方向（因为 coherence = 0）
+      coherence: 0,               // ✅ 纯噪声
       nDots: 360,
       speed: speed,
-      dotSize: 0.03 * cm_to_px_x ,      // ✅ 点大小（单位像素）
-      fieldRadius: 3.5 * cm_to_px_x ,  // ✅ 圆半径（7cm直径的一半）
+      dotSize: 0.03 * cm_to_px_x,
+      fieldRadius: 3.5 * cm_to_px_x,
       dotColor: "white"
     });
     
-    }
-    // 记录开始时间和持续时长
+    // ========== 启动标志 ==========
     window.rdkStart = performance.now();
-    window.rdkDuration = parseFloat(0.5) * 1000;  // 转成毫秒
+    window.rdkDuration = 500;  // 0.6 秒
     window.rdkRunning = true;
     
-    console.log("✅ M1阶段 RDK 初始化完成，TimeDur =", TimeDur, "秒");
-    
+    console.log("✅ RDK mask：纯噪声，持续 0.5 秒");
     
     // keep track of which components have finished
     Mask_2Components = [];
     Mask_2Components.push(BKG_6);
-    Mask_2Components.push(Fixation_4);
     
     for (const thisComponent of Mask_2Components)
       if ('status' in thisComponent)
@@ -1568,16 +1695,6 @@ function Mask_2RoutineEachFrame() {
       BKG_6.frameNStart = frameN;  // exact frame index
       
       BKG_6.setAutoDraw(true);
-    }
-    
-    
-    // *Fixation_4* updates
-    if (t >= 0.0 && Fixation_4.status === PsychoJS.Status.NOT_STARTED) {
-      // keep track of start time/frame for later
-      Fixation_4.tStart = t;  // (not accounting for frame time here)
-      Fixation_4.frameNStart = frameN;  // exact frame index
-      
-      Fixation_4.setAutoDraw(true);
     }
     
     
@@ -1651,72 +1768,80 @@ function Mask_2RoutineEnd(snapshot) {
 }
 
 
-var M2Components;
-function M2RoutineBegin(snapshot) {
+var fieldRadius;
+var fieldCenterX;
+var fieldCenterY;
+var dotRadius;
+var dotSpeed;
+var direction;
+var numDots;
+var dots;
+var globalEnvelope;
+var canvas;
+var ctx;
+var startTime;
+var encodingComponents;
+function encodingRoutineBegin(snapshot) {
   return async function () {
     TrialHandler.fromSnapshot(snapshot); // ensure that .thisN vals are up to date
     
-    //--- Prepare to start Routine 'M2' ---
+    //--- Prepare to start Routine 'encoding' ---
     t = 0;
-    M2Clock.reset(); // clock
+    encodingClock.reset(); // clock
     frameN = -1;
     continueRoutine = true; // until we're told otherwise
     routineTimer.add(999.000000);
     // update component parameters for each repeat
-    psychoJS.experiment.addData('M2.started', globalClock.getTime());
-    // Run 'Begin Routine' code from Direction
-    let direction = window.trial_direction;
+    psychoJS.experiment.addData('encoding.started', globalClock.getTime());
+    let cm_to_px_x = psychoJS.window.size[0] * x_scale;
+    fieldRadius = 3.5 * cm_to_px_x;
+    fieldCenterX = window.innerWidth / 2;
+    fieldCenterY = window.innerHeight / 2;
+    dotRadius = 0.03 * cm_to_px_x;
+    dotSpeed = 2 * cm_to_px_x;
+    direction = trial_direction * Math.PI / 180;
+    numDots = 360;
+    let coh =parseFloat(Coherence1);// 
     
+    let rampDur = (coh === 0.3) ? 60 : (coh === 0.7 ? 30 : 45);
+    let timeDur = parseFloat(TimeDur) * 1000 - rampDur;
+    // 创建 dot 阵列
+    dots = [];
+    for (let i = 0; i < numDots; i++) {
+      const r = Math.sqrt(Math.random()) * fieldRadius;
+      const a = Math.random() * 2 * Math.PI;
+      const x = fieldCenterX + r * Math.cos(a);
+      const y = fieldCenterY + r * Math.sin(a);
+      dots.push(new Dot(x, y, dotRadius, dotSpeed, direction));
+    }
+    
+    // coherence 包络结构
+    globalEnvelope = new RampEnvelope(0, coh, 500, rampDur, timeDur, rampDur, 500);
+    
+    // Canvas 初始化（仅一次）
     if (!window.rdkCanvas) {
-      const root = document.getElementById("root");
       const canvas = document.createElement("canvas");
-      canvas.id = "canvas";
-      canvas.width = psychoJS.window.size[0];
-      canvas.height = psychoJS.window.size[1];
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
       canvas.style.position = "absolute";
       canvas.style.top = "0";
       canvas.style.left = "0";
-      canvas.style.zIndex = "10";
-      canvas.style.backgroundColor = "transparent";
-      root.appendChild(canvas);
+      canvas.style.zIndex = "1000";
+      document.body.appendChild(canvas);
       window.rdkCanvas = canvas;
-      //  x_scale is  cm → norm，now cm → px
-    let cm_to_px_x = psychoJS.window.size[0] * x_scale;  // px/each cm
-    let cm_to_px_y = psychoJS.window.size[1] * y_scale;
-    
-    let fps = 120;
-     //  setting your speed
-    let speed = (3.5 * cm_to_px_x) / fps;
-    console.log(`📏 fps=${fps} Hz，speed=${speed.toFixed(2)} px/frame`);
-    
-      //  RDK
-      window.rdk = new RDK({
-        canvasId: "canvas",
-        type: "keypress", 
-        direction: direction,  // 可替换为变量
-        coherence: parseFloat(Coherence1), // 可替换为变量
-        dotColor: "rgb(7, 193, 7)",  
-        nDots: 360,
-        speed: speed ,
-        dotSize: 0.03 * cm_to_px_x ,      // ✅ 点大小
-      fieldRadius: 3.5 * cm_to_px_x ,  // ✅ 圆半径
-        noiseMode: "inertial"
-      });
+      window.ctx = canvas.getContext("2d");
     }
-    // 记录开始时间和持续时长
-    window.rdkStart = performance.now();
-    window.rdkDuration = parseFloat(TimeDur) * 1000;  // 转成毫秒
-    window.rdkRunning = true;
+    canvas = window.rdkCanvas;
+    ctx = window.ctx;
     
-    console.log(" M2阶段 RDK 初始化完成，TimeDur =", TimeDur, "秒");
-    // 存储这个方向
-    psychoJS.experiment.addData('direction', direction);
+    // 启动计时器
+    startTime = performance.now();
     
     // keep track of which components have finished
-    M2Components = [];
-    M2Components.push(BKG_3);
+    encodingComponents = [];
+    encodingComponents.push(BKG_3);
     
-    for (const thisComponent of M2Components)
+    for (const thisComponent of encodingComponents)
       if ('status' in thisComponent)
         thisComponent.status = PsychoJS.Status.NOT_STARTED;
     return Scheduler.Event.NEXT;
@@ -1724,11 +1849,11 @@ function M2RoutineBegin(snapshot) {
 }
 
 
-function M2RoutineEachFrame() {
+function encodingRoutineEachFrame() {
   return async function () {
-    //--- Loop for each frame of Routine 'M2' ---
+    //--- Loop for each frame of Routine 'encoding' ---
     // get current time
-    t = M2Clock.getTime();
+    t = encodingClock.getTime();
     frameN = frameN + 1;// number of completed frames (so 0 is the first frame)
     // update/draw components on each frame
     
@@ -1745,21 +1870,49 @@ function M2RoutineEachFrame() {
     if (BKG_3.status === PsychoJS.Status.STARTED && t >= frameRemains) {
       BKG_3.setAutoDraw(false);
     }
+    const now = performance.now();
+    const elapsed = now - startTime;
+    const dt = 1 / 60;
+    let coh = parseFloat(Coherence1);
+    const coherence = globalEnvelope.getCoherence(elapsed);
+    const speedFactor = globalEnvelope.getSpeedFactor(elapsed);
+    const adjustedSpeed = dotSpeed * speedFactor;
     
-    if (window.rdkRunning && window.rdk) {
-      // 每帧更新 RDK
-      window.rdk.updateAndDraw();
+    // ⬇️ 每帧统一分配 coherent / noise 点（避免每个点独立随机）
+    assignDotModes(dots, coherence);
     
-      // 检查是否达到 TimeDur 秒
-      const elapsed = performance.now() - window.rdkStart;
-      if (elapsed >= window.rdkDuration) {
-        window.rdkRunning = false;
-        continueRoutine = false;
-        console.log(`⏱ TimeDur 达成，本轮停止，已运行 ${(elapsed / 1000).toFixed(3)} 秒`);
+    // 清空画布（透明）
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    let totalSpeed = 0;
+    let validDots = 0;
+    
+    for (let i = 0; i < dots.length; i++) {
+      const prevX = dots[i].x;
+      const prevY = dots[i].y;
+     //dots[i].speed = dotSpeed;  // 所有点速度一致 dots[i].speed = adjustedSpeed;
+     const compensatedSpeed = perceptualSpeedCompensation(dotSpeed, coherence);
+     dots[i].speed = compensatedSpeed;
+    
+     
+      dots[i].updateDirection(dt);  // ✅ 只用 dot 自带的 this.mode 属性
+      dots[i].draw(ctx);
+    
+      const dx = dots[i].x - prevX;
+      const dy = dots[i].y - prevY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < fieldRadius * 0.5) {
+        totalSpeed += dist / dt;
+        validDots += 1;
       }
-    } else {
-      // fallback: 若 RDK 没有初始化成功
-      console.warn("⚠️ RDK 尚未初始化或已停止运行！");
+    }
+    
+    const avgSpeed = validDots > 0 ? totalSpeed / validDots : 0;
+    
+    console.log(`t=${elapsed.toFixed(0)}ms | coh=${coherence.toFixed(2)} | avgSpeed=${avgSpeed.toFixed(2)} px/s`);
+    
+    if (globalEnvelope.isFinished(elapsed)) {
+      continueRoutine = false;
     }
     
     // check for quit (typically the Esc key)
@@ -1773,7 +1926,7 @@ function M2RoutineEachFrame() {
     }
     
     continueRoutine = false;  // reverts to True if at least one component still running
-    for (const thisComponent of M2Components)
+    for (const thisComponent of encodingComponents)
       if ('status' in thisComponent && thisComponent.status !== PsychoJS.Status.FINISHED) {
         continueRoutine = true;
         break;
@@ -1789,15 +1942,15 @@ function M2RoutineEachFrame() {
 }
 
 
-function M2RoutineEnd(snapshot) {
+function encodingRoutineEnd(snapshot) {
   return async function () {
-    //--- Ending Routine 'M2' ---
-    for (const thisComponent of M2Components) {
+    //--- Ending Routine 'encoding' ---
+    for (const thisComponent of encodingComponents) {
       if (typeof thisComponent.setAutoDraw === 'function') {
         thisComponent.setAutoDraw(false);
       }
     }
-    psychoJS.experiment.addData('M2.stopped', globalClock.getTime());
+    psychoJS.experiment.addData('encoding.stopped', globalClock.getTime());
     if (window.rdkCanvas) {
       window.rdkCanvas.remove();
       window.rdkCanvas = null;
@@ -1923,11 +2076,6 @@ function CueRoutineEnd(snapshot) {
 }
 
 
-var Key_pressed;
-var Key_release;
-var pressStart;
-var releaseTime;
-var keyDuration;
 var ResponseComponents;
 function ResponseRoutineBegin(snapshot) {
   return async function () {
@@ -1941,115 +2089,68 @@ function ResponseRoutineBegin(snapshot) {
     routineTimer.add(999.000000);
     // update component parameters for each repeat
     psychoJS.experiment.addData('Response.started', globalClock.getTime());
-    // Run 'Begin Routine' code from Direction_2
-    // ========== 初始化按键变量 ==========
-    Key_pressed = false;
-    Key_release = false;
-    pressStart = null;
-    releaseTime = null;
-    keyDuration = 9999;
-    let direction = window.trial_direction;
-    // ========== 清除默认事件，聚焦 ==========
-    if (typeof psychoJS !== 'undefined') {
-      psychoJS.eventManager.clearEvents();
-    }
-    window.focus();
-    console.log("✅ 获取键盘焦点");
-    
-    // ========== 计算屏幕像素密度 ==========
+    // ========== 1. 初始化关键参数 ==========
     let cm_to_px_x = psychoJS.window.size[0] * x_scale;
-    let cm_to_px_y = psychoJS.window.size[1] * y_scale;
-    let fps = 120;
-    let speed = (3.5 * cm_to_px_x) / fps;
-    // ========== 创建 canvas 并初始化 RDK（初始白色） ==========
-    const root = document.getElementById("root") || document.body;
-    if (!window.rdkCanvas) {
-      const canvas = document.createElement("canvas");
-      canvas.id = "canvas";
-      canvas.width = psychoJS.window.size[0];
-      canvas.height = psychoJS.window.size[1];
-      canvas.style.position = "absolute";
-      canvas.style.top = "0";
-      canvas.style.left = "0";
-      canvas.style.zIndex = "10";
-      canvas.style.backgroundColor = "transparent";
-      root.appendChild(canvas);
-      window.rdkCanvas = canvas;
+    let fieldRadius = 3.5 * cm_to_px_x;
+    let fieldCenterX = window.innerWidth / 2;
+    let fieldCenterY = window.innerHeight / 2;
+    let dotRadius = 0.03 * cm_to_px_x;
+    let dotSpeed = 1.75 * cm_to_px_x;
+    let direction = trial_direction * Math.PI / 180;
+    let coh = 0;
+    let numDots = 360;
     
-      window.rdk = new RDK({
-        canvasId: "canvas",
-        type: "keypress",
-        noiseMode: "inertial",
-        direction: direction,
-        coherence: parseFloat(Coherence1),
-        nDots: 360,
-        speed: 0, // 初始不动
-        dotSize: 0.03 * cm_to_px_x,
-        fieldRadius: 3.5 * cm_to_px_x,
-        dotColor: "white"  // ✅ 白色
-      });
-      console.log("🎬 初始白色 RDK 初始化完成");
+    // 保存给其他阶段用
+    window.fieldRadius = fieldRadius;
+    window.fieldCenterX = fieldCenterX;
+    window.fieldCenterY = fieldCenterY;
+    window.dotSpeed = dotSpeed;
+    
+    // ========== 2. 创建 dot 阵列（reproduction 专用） ==========
+    window.reproDots = [];
+    for (let i = 0; i < numDots; i++) {
+      const r = Math.sqrt(Math.random()) * fieldRadius;
+      const a = Math.random() * 2 * Math.PI;
+      const x = fieldCenterX + r * Math.cos(a);
+      const y = fieldCenterY + r * Math.sin(a);
+      const dot = new Dot(x, y, dotRadius, 0, direction);  // 初始速度为0
+      window.reproDots.push(dot);
     }
+    window.keyPressed = false;
+    window.keyReleased = false;
+    window.pressStart = null;
+    window.releaseTime = null;
+    window.reproducedDuration = null;
     
-    window.rdkStart = performance.now();
-    window.rdkDuration = 6000;
-    window.rdkRunning = true;
+    window.addEventListener("keydown", function (event) {
+      if (event.key === "ArrowDown" && !window.keyPressed) {
+        window.keyPressed = true;
+        window.pressStart = performance.now();
     
-    // ========== 按键事件监听 ==========
-    window.keyDownHandler = function(event) {
-      if (event.key === "ArrowDown" && !Key_pressed) {
-        Key_pressed = true;
-        pressStart = performance.now();
+        // 启动所有 dot 的速度
+        for (let dot of window.reproDots) {
+          dot.speed = window.dotSpeed;
+        }
     
-        // ✅ 按下后重新初始化为绿色RDK
-        window.rdk = new RDK({
-          canvasId: "canvas",
-          type: "keypress",
-          noiseMode: "inertial",
-          direction: direction,
-          coherence: parseFloat(Coherence1),
-          nDots: 360,
-          speed: speed,
-          dotSize: 0.03 * cm_to_px_x,
-          fieldRadius: 3.5 * cm_to_px_x,
-          dotColor: "rgb(7, 193, 7)"
-        });
-    
-        console.log("⬇️ 按下 ↓ 键，RDK 切换为绿色并开始运动");
+        console.log("⬇️ 再现开始");
       }
-    };
+    });
     
-    window.keyUpHandler = function(event) {
-      if (event.key === "ArrowDown" && Key_pressed && !Key_release) {
-        Key_release = true;
-        releaseTime = performance.now();
-        keyDuration = releaseTime - pressStart;
-        if (window.rdk) window.rdk.speed = 0;
-        console.log("🔴 松开 ↓ 键，keyDuration =", keyDuration.toFixed(2));
-      }
-    };
+    window.addEventListener("keyup", function (event) {
+      if (event.key === "ArrowDown" && window.keyPressed && !window.keyReleased) {
+        window.keyReleased = true;
+        window.releaseTime = performance.now();
+        window.reproducedDuration = window.releaseTime - window.pressStart;
     
-    window.addEventListener("keydown", window.keyDownHandler);
-    window.addEventListener("keyup", window.keyUpHandler);
-    console.log("📥 监听器绑定完成");
+        // 停止 dot
+        for (let dot of window.reproDots) {
+          dot.speed = 0;
+        }
     
-    // ========== 每帧更新 ==========
-    if (window.rdk && window.rdkRunning) {
-      window.rdk.updateAndDraw(true);
-    
-      const elapsed = performance.now() - window.rdkStart;
-    
-      if (Key_release) {
+        console.log("🔴 再现结束，时长 =", window.reproducedDuration.toFixed(0), "ms");
         continueRoutine = false;
       }
-    
-      if (elapsed >= window.rdkDuration && !Key_release) {
-        keyDuration = 9999;
-        if (window.rdk) window.rdk.speed = 0;
-        console.log("⏱ 超时未松开，keyDuration = 9999");
-        continueRoutine = false;
-      }
-    }
+    });
     
     // keep track of which components have finished
     ResponseComponents = [];
@@ -2070,24 +2171,6 @@ function ResponseRoutineEachFrame() {
     t = ResponseClock.getTime();
     frameN = frameN + 1;// number of completed frames (so 0 is the first frame)
     // update/draw components on each frame
-    // 每帧更新 RDK
-    if (window.rdk && window.rdkRunning) {
-      window.rdk.updateAndDraw(true);
-    
-      const elapsed = performance.now() - window.rdkStart;
-    
-      if (Key_release) {
-        continueRoutine = false;
-      }
-    
-      if (elapsed >= window.rdkDuration && !Key_release) {
-        keyDuration = 9999;
-        console.log("⏱ 超时未松开，keyDuration = 9999");
-        if (window.rdk) window.rdk.speed = 0;
-        continueRoutine = false;
-      }
-    }
-    
     
     // *BKG_4* updates
     if (t >= 0.0 && BKG_4.status === PsychoJS.Status.NOT_STARTED) {
@@ -2102,6 +2185,21 @@ function ResponseRoutineEachFrame() {
     if (BKG_4.status === PsychoJS.Status.STARTED && t >= frameRemains) {
       BKG_4.setAutoDraw(false);
     }
+    ensureCanvasReady();
+    const now = performance.now();
+    const elapsed = now - startTime;
+    let coh = 0;//parseFloat(Coherence1)
+    const ctx = window.rdkCanvas.getContext("2d");
+    
+    ctx.clearRect(0, 0, window.rdkCanvas.width, window.rdkCanvas.height);
+    
+    const dt = 1 / 60;
+    for (let dot of window.reproDots) {
+      const mode = (Math.random() < coh) ? "coherent" : "random";
+      dot.updateDirection(dt, mode, coh);  // 你原有的 dot 方法
+      dot.draw(ctx);
+    }
+    
     // check for quit (typically the Esc key)
     if (psychoJS.experiment.experimentEnded || psychoJS.eventManager.getKeys({keyList:['escape']}).length > 0) {
       return quitPsychoJS('The [Escape] key was pressed. Goodbye!', false);
@@ -2138,21 +2236,13 @@ function ResponseRoutineEnd(snapshot) {
       }
     }
     psychoJS.experiment.addData('Response.stopped', globalClock.getTime());
-    // 清除监听器
-    window.removeEventListener("keydown", window.keyDownHandler);
-    window.removeEventListener("keyup", window.keyUpHandler);
-    
-    // 移除 canvas
+    psychoJS.experiment.addData("keyDuration",  window.reproducedDuration.toFixed(0));
+    window.keyDuration = window.reproducedDuration.toFixed(0);
+    // 清除画布
     if (window.rdkCanvas) {
-      window.rdkCanvas.remove();
-      window.rdkCanvas = null;
+      const ctx = window.rdkCanvas.getContext("2d");
+      ctx.clearRect(0, 0, window.rdkCanvas.width, window.rdkCanvas.height);
     }
-    window.rdk = null;
-    
-    // 保存数据
-    psychoJS.experiment.addData("keyDuration", keyDuration);
-    console.log("🧼 Response routine 完成，记录 keyDuration =", keyDuration);
-    window.keyDuration_global = keyDuration;
     
     // Routines running outside a loop should always advance the datafile row
     if (currentLoop === psychoJS.experiment) {
@@ -2178,10 +2268,17 @@ function Feedback_TimeRoutineBegin(snapshot) {
     psychoJS.experiment.addData('Feedback_Time.started', globalClock.getTime());
     // Run 'Begin Routine' code from Feedback_code_5
     // 获取响应时间（ms）与目标时间（s）
-    let timeResp = window.keyDuration_global;
+    let timeResp = window.keyDuration;
     let timeTarget = parseFloat(TimeDur);
     
     let feedbackID = 0;
+    // 如果是实验阶段，则跳过整个反馈 routine
+    if (typeof window.Block_id !== 'undefined' && window.Block_id >= window.Practice_num) {
+        continueRoutine = false;
+        console.log("⏭️ 实验阶段跳过反馈：Block_id = " + window.Block_id);
+    } else {
+        console.log("✅ 练习阶段显示反馈：Block_id = " + window.Block_id);
+    }
     
     if (TrialType === "Time" && timeResp !== 9999) {
         let timeRespSec = timeResp / 1000;
@@ -2353,6 +2450,9 @@ function Feedback_TimeRoutineEachFrame() {
 }
 
 
+var keyDuration;
+var Key_pressed;
+var Key_release;
 function Feedback_TimeRoutineEnd(snapshot) {
   return async function () {
     //--- Ending Routine 'Feedback_Time' ---
@@ -2365,7 +2465,7 @@ function Feedback_TimeRoutineEnd(snapshot) {
     // Run 'End Routine' code from Feedback_code_5
     keyDuration = 10;
     Key_pressed = false;
-    (Key_release === 0);
+    Key_release = false;
     color_1 = [1, 1, 1];
     color_2 = [1, 1, 1];
     color_3 = [1, 1, 1];
@@ -2399,6 +2499,8 @@ async function quitPsychoJS(message, isCompleted) {
   if (psychoJS.experiment.isEntryEmpty()) {
     psychoJS.experiment.nextEntry();
   }
+  
+  
   
   
   
